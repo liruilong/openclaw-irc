@@ -58,6 +58,9 @@ export class EmbeddedIRCServer {
 
       client.on("data", (line: string) => {
         if (!line) return;
+        if (line.toUpperCase().startsWith("NICK") || line.toUpperCase().startsWith("USER") || line.toUpperCase().startsWith("JOIN")) {
+          this.log(`[raw id=${client.id}] ${line}`);
+        }
         const parts = line.split(" ");
         if (parts[0]?.toUpperCase() !== "NICK" || !parts[1]) return;
         const nick = parts[1];

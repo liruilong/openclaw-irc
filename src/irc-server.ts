@@ -156,9 +156,10 @@ export class EmbeddedIRCServer {
         client.send(true, "315", client.nickname, target, ":End of /WHO list");
       });
 
-      const cleanup = () => {
+      const cleanup = (reason: string) => {
         for (const [ch, members] of this.channels) {
           if (members.has(client.nickname)) {
+            this.log(`${client.nickname} leaving ${ch} (${reason}, id=${client.id})`);
             members.delete(client.nickname);
             for (const [, member] of members) {
               member.send(client.mask, "QUIT", `:${client.nickname}`);
@@ -168,9 +169,9 @@ export class EmbeddedIRCServer {
         }
       };
 
-      client.on("end", cleanup);
-      client.on("close", cleanup);
-      client.on("user:quit", cleanup);
+      client.on("end", () => cleanup("end"));
+      client.on("close", () => cleanup("close"));
+      client.on("user:quit", () => cleanup("quit"));
     });
 
     this.server.on("error", (err: Error) => {

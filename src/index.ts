@@ -13,8 +13,8 @@ import { Bridge } from "./ws-bridge.js";
 import { EmbeddedIRCServer } from "./irc-server.js";
 import { IRCBridge } from "./llm-client.js";
 
-const WS_PORT = parseInt(process.env.WS_PORT ?? "9881", 10);
-const MCP_HTTP_PORT = parseInt(process.env.MCP_HTTP_PORT ?? "9884", 10);
+const WS_PORT = parseInt(process.env.WS_PORT ?? "9891", 10);
+const MCP_HTTP_PORT = parseInt(process.env.MCP_HTTP_PORT ?? "9894", 10);
 const IRC_PORT = parseInt(process.env.IRC_PORT ?? "6667", 10);
 const IRC_CHANNEL = process.env.IRC_CHANNEL ?? "#miku";
 const IRC_OPENCLAW_NICK = process.env.IRC_OPENCLAW_NICK ?? "miku";
@@ -28,32 +28,33 @@ const ircBridge = new IRCBridge({
   openclawNick: IRC_OPENCLAW_NICK,
 });
 
-// Local TTS fallback: plays via Mac system audio when no WS speaker is registered
 bridge.onLocalTTS(async (text: string, lang: string) => {
   try {
     const result = await localTTS.synthesize(text, lang as SupportedLang);
     await localTTS.playLocal(result.audio);
   } catch (err) {
-    process.stderr.write(`[openclaw-irc] local TTS error: ${err instanceof Error ? err.message : err}\n`);
+    process.stderr.write(`[openclaw-irc] Local TTS fallback error: ${err instanceof Error ? err.message : err}\n`);
   }
 });
 
-// WS chat → IRC bridge → OpenClaw → reply broadcast
 bridge.onChatInput(async (text: string) => {
-  process.stderr.write(`[openclaw-irc] chat: "${text.slice(0, 60)}"\n`);
-  const reply = await ircBridge.chat(text);
-  process.stderr.write(`[openclaw-irc] reply: "${reply.slice(0, 60)}"\n`);
-  await bridge.broadcastSpeakText({ text: reply, lang: "zh" });
+  try {
+    process.stderr.write(`[openclaw-irc] chat via IRC: "${text.slice(0, 60)}"\n`);
+    const reply = await ircBridge.chat(text);
+    process.stderr.write(`[openclaw-irc] IRC reply: "${reply.slice(0, 60)}"\n`);
+    await bridge.broadcastSpeakText({ text: reply, lang: "zh" });
+  } catch (err) {
+    process.stderr.write(`[openclaw-irc] IRC chat error: ${err instanceof Error ? err.message : err}\n`);
+  }
 });
-
-// ── MCP Tools ──
 
 function registerTools(server: McpServer): void {
   server.tool(
     "speak",
-    `Let the character speak. Broadcasts text to all connected WebSocket clients.
+    `Let the character speak with a specific emotion/animation.
+Broadcasts text to all connected WebSocket clients (OLV, Spine-pet, Subtitle).
 Each client independently decides whether to synthesize TTS audio.
-If no speaker client is connected, the server plays TTS locally via Mac system audio.
+If no audio-capable client (speaker) is connected, the server plays TTS locally via Mac system audio.
 Available emotions: ${EMOTIONS.join(", ")}
 Emotion-to-animation mapping: ${EMOTIONS.map((e) => `${e} -> ${EMOTION_ANIMATIONS[e].name} (id:${EMOTION_ANIMATIONS[e].animId})`).join(", ")}
 Supported languages: ${SUPPORTED_LANGS.join(", ")}`,
@@ -70,7 +71,7 @@ Supported languages: ${SUPPORTED_LANGS.join(", ")}`,
       subtitle: z
         .string()
         .optional()
-        .describe("Subtitle text. Defaults to the speak text. Use this to show a translation."),
+        .describe("Subtitle text. Defaults to the speak text if not provided."),
       color: z
         .string()
         .optional()
@@ -78,11 +79,11 @@ Supported languages: ${SUPPORTED_LANGS.join(", ")}`,
       motion: z
         .string()
         .optional()
-        .describe("Motion group name for Live2D model (e.g. 'w-cute02-pose'). If not specified, auto-selected by emotion."),
+        .describe("Motion group name for Live2D model. If not specified, uses default."),
     },
     async ({ text, emotion, lang, subtitle, color, motion }) => {
       const displayText = subtitle ?? text;
-      process.stderr.write(`[openclaw-irc] speak: emotion="${emotion}" text="${displayText.slice(0, 40)}"\n`);
+      process.stderr.write(`[openclaw-irc] speak: emotion="${emotion}" motion="${motion}"\n`);
       try {
         const motions = motion ? [motion] : undefined;
         const { clientCount, localFallback } = await bridge.broadcastSpeakText({
@@ -93,11 +94,11 @@ Supported languages: ${SUPPORTED_LANGS.join(", ")}`,
           lang,
         });
 
-        const parts = [
-          `"${displayText}" [${emotion}] (${EMOTION_ANIMATIONS[emotion as Emotion].name}).`,
-          `${clientCount} client(s), ${bridge.speakerCount} speaker(s).`,
+        const parts: string[] = [
+          `Character speaks "${displayText}" with [${emotion}] animation (${EMOTION_ANIMATIONS[emotion as Emotion].name}).`,
         ];
-        if (localFallback) parts.push("Local TTS fallback played.");
+        parts.push(`Broadcast to ${clientCount} client(s), ${bridge.speakerCount} speaker(s) registered.`);
+        if (localFallback) parts.push("Local TTS fallback: played via Mac system audio.");
 
         return { content: [{ type: "text", text: parts.join(" ") }] };
       } catch (err) {
@@ -111,22 +112,25 @@ Supported languages: ${SUPPORTED_LANGS.join(", ")}`,
 
   server.tool(
     "get_status",
-    "Check connection status of IRC, WebSocket clients, and TTS service.",
+    "Check connection status of IRC, WebSocket clients, and TTS.",
     {},
     async () => {
       const ttsOk = await localTTS.checkHealth();
+
       return {
-        content: [{
-          type: "text",
-          text: [
-            `=== openclaw-irc ===`,
-            `IRC Server: :${IRC_PORT}`,
-            `IRC Bridge: ${ircBridge.isConnected ? "CONNECTED" : "DISCONNECTED"} (${IRC_CHANNEL})`,
-            `WebSocket: :${WS_PORT} (${bridge.clientCount} client(s))`,
-            `Speakers: ${bridge.speakerCount} (local TTS ${bridge.speakerCount === 0 ? "ACTIVE" : "INACTIVE"})`,
-            `Volcano TTS: ${ttsOk ? "OK" : "NOT CONFIGURED"}`,
-          ].join("\n"),
-        }],
+        content: [
+          {
+            type: "text",
+            text: [
+              `=== openclaw-irc Status ===`,
+              `IRC Server: port ${IRC_PORT}`,
+              `IRC Bridge: ${ircBridge.isConnected ? "CONNECTED" : "NOT CONNECTED"} (channel: ${IRC_CHANNEL})`,
+              `WebSocket (port ${WS_PORT}): ${bridge.clientCount} client(s) connected`,
+              `Registered speakers: ${bridge.speakerCount} (local TTS fallback ${bridge.speakerCount === 0 ? "ACTIVE" : "INACTIVE"})`,
+              `Volcano TTS: ${ttsOk ? "OK" : "NOT CONFIGURED"}`,
+            ].join("\n"),
+          },
+        ],
       };
     }
   );
@@ -174,26 +178,32 @@ function startHttpMcp(): void {
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sid: string) => {
               httpTransports[sid] = transport;
+              process.stderr.write(`[MCP-HTTP] Session initialized: ${sid}\n`);
             },
           });
+
           transport.onclose = () => {
             const sid = transport.sessionId;
-            if (sid && httpTransports[sid]) delete httpTransports[sid];
+            if (sid && httpTransports[sid]) {
+              delete httpTransports[sid];
+              process.stderr.write(`[MCP-HTTP] Session closed: ${sid}\n`);
+            }
           };
 
-          const s = new McpServer({ name: "openclaw-irc", version: "1.0.0" });
-          registerTools(s);
-          await s.connect(transport);
+          const sessionMcp = new McpServer({ name: "openclaw-irc", version: "1.0.0" });
+          registerTools(sessionMcp);
+          await sessionMcp.connect(transport);
+
           await transport.handleRequest(req, res, parsed);
           return;
         } else {
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Bad Request" }, id: null }));
+          res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: expected initialize" }, id: null }));
           return;
         }
       } else {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "No valid session" }, id: null }));
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: no valid session" }, id: null }));
         return;
       }
 
@@ -207,7 +217,7 @@ function startHttpMcp(): void {
       process.stderr.write(`[MCP-HTTP] Error: ${error instanceof Error ? error.message : error}\n`);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" }, id: null }));
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null }));
       }
     }
   });
@@ -219,11 +229,11 @@ function startHttpMcp(): void {
       setTimeout(() => startHttpMcp(), 2000);
       return;
     }
-    process.stderr.write(`[MCP-HTTP] Error: ${err.message}\n`);
+    process.stderr.write(`[MCP-HTTP] Server error: ${err.message}\n`);
   });
 
   httpServer.listen(MCP_HTTP_PORT, "0.0.0.0", () => {
-    process.stderr.write(`[MCP-HTTP] http://0.0.0.0:${MCP_HTTP_PORT}/mcp\n`);
+    process.stderr.write(`[MCP-HTTP] Streamable HTTP MCP at http://0.0.0.0:${MCP_HTTP_PORT}/mcp\n`);
   });
 }
 
@@ -236,7 +246,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-// ── Main ──
+// ── Start ──
 
 async function main() {
   await ircServer.start();
@@ -246,10 +256,13 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
-  process.stderr.write(`[openclaw-irc] started (IRC:${IRC_PORT} WS:${WS_PORT} MCP:${MCP_HTTP_PORT})\n`);
+
+  process.stderr.write(
+    `[openclaw-irc] Started (IRC: ${IRC_PORT}, WS: ${WS_PORT}, HTTP-MCP: ${MCP_HTTP_PORT})\n`
+  );
 }
 
 main().catch((err) => {
-  process.stderr.write(`[openclaw-irc] fatal: ${err}\n`);
+  process.stderr.write(`[openclaw-irc] Fatal error: ${err}\n`);
   process.exit(1);
 });

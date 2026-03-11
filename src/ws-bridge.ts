@@ -19,16 +19,14 @@ export class Bridge {
   private onLocalTTSCallback: ((text: string, lang: string) => Promise<void>) | null = null;
   private onChatInputCallback: ((text: string) => Promise<void>) | null = null;
 
-  constructor(port = 9881) {
+  constructor(port = 9891) {
     this.port = port;
   }
 
-  /** Register callback for local TTS fallback (called when speakers set is empty). */
   onLocalTTS(callback: (text: string, lang: string) => Promise<void>): void {
     this.onLocalTTSCallback = callback;
   }
 
-  /** Register callback for incoming chat messages from WS clients. */
   onChatInput(callback: (text: string) => Promise<void>): void {
     this.onChatInputCallback = callback;
   }
@@ -48,7 +46,7 @@ export class Bridge {
 
     wss.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
-        this.log(`port ${this.port} in use, retrying in 2s...`);
+        this.log(`Port ${this.port} in use, retrying in 2s...`);
         wss.close();
         setTimeout(() => this.start(), 2000);
         return;
@@ -63,19 +61,19 @@ export class Bridge {
 
     wss.on("connection", (ws) => {
       this.clients.add(ws);
-      this.log(`client connected (total: ${this.clients.size})`);
+      this.log(`Client connected (total: ${this.clients.size})`);
 
       ws.on("message", (data) => {
         try {
           const msg = JSON.parse(data.toString());
           this.handleMessage(ws, msg);
-        } catch { /* ignore malformed */ }
+        } catch { /* ignore */ }
       });
 
       ws.on("close", () => {
         this.clients.delete(ws);
         this.speakers.delete(ws);
-        this.log(`client disconnected (total: ${this.clients.size}, speakers: ${this.speakers.size})`);
+        this.log(`Client disconnected (total: ${this.clients.size}, speakers: ${this.speakers.size})`);
       });
 
       ws.on("error", () => {
@@ -89,18 +87,12 @@ export class Bridge {
     switch (msg.type) {
       case "register_speaker":
         this.speakers.add(ws);
-        this.log(`speaker registered (total: ${this.speakers.size})`);
-        ws.send(JSON.stringify({ type: "speaker_registered", ok: true }));
+        this.log(`Speaker registered (total: ${this.speakers.size})`);
         break;
 
       case "chat":
-        if (typeof msg.text === "string" && msg.text.trim()) {
-          this.log(`chat input: "${(msg.text as string).slice(0, 60)}"`);
-          if (this.onChatInputCallback) {
-            this.onChatInputCallback(msg.text as string).catch((err) => {
-              this.log(`chat callback error: ${err instanceof Error ? err.message : err}`);
-            });
-          }
+        if (typeof msg.text === "string" && this.onChatInputCallback) {
+          this.onChatInputCallback(msg.text);
         }
         break;
 
@@ -109,10 +101,6 @@ export class Bridge {
     }
   }
 
-  /**
-   * Broadcast speak_text to all connected WS clients.
-   * If no speakers are registered, triggers local TTS fallback.
-   */
   async broadcastSpeakText(opts: {
     text: string;
     emotion?: string;
@@ -133,11 +121,11 @@ export class Bridge {
     };
     const payload = JSON.stringify(msg);
 
-    let count = 0;
+    let clientCount = 0;
     for (const ws of this.clients) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(payload);
-        count++;
+        clientCount++;
       }
     }
 
@@ -147,12 +135,12 @@ export class Bridge {
       try {
         await this.onLocalTTSCallback(text, lang ?? "zh");
       } catch (err) {
-        this.log(`local TTS fallback error: ${err instanceof Error ? err.message : err}`);
+        this.log(`Local TTS fallback failed: ${err instanceof Error ? err.message : err}`);
       }
     }
 
-    this.log(`broadcast: "${text.slice(0, 40)}" -> ${count} client(s), ${this.speakers.size} speaker(s), local=${localFallback}`);
-    return { clientCount: count, localFallback };
+    this.log(`broadcastSpeakText: "${text.slice(0, 40)}" -> ${clientCount} clients, speakers=${this.speakers.size}, localFallback=${localFallback}`);
+    return { clientCount, localFallback };
   }
 
   stop(): void {

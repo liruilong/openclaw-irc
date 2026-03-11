@@ -136,9 +136,17 @@ export class EmbeddedIRCServer {
             client.send(true, "403", client.nickname, target, ":No such channel");
             return;
           }
+          const deliveredIds = new Set<number>();
           for (const [nick, member] of members) {
             if (nick !== client.nickname) {
               member.send(client.mask, "PRIVMSG", target, `:${text}`);
+              deliveredIds.add(member.id);
+            }
+          }
+          for (const conn of this.server._connections) {
+            if (conn.nickname !== client.nickname && conn._socket && conn.isAuthed && !deliveredIds.has(conn.id) && conn.nickname !== "bridge") {
+              this.log(`fallback-deliver to ${conn.nickname} (id=${conn.id})`);
+              conn.send(client.mask, "PRIVMSG", target, `:${text}`);
             }
           }
         } else {

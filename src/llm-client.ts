@@ -62,9 +62,6 @@ export class IRCBridge extends EventEmitter {
 
     this.client.on("message", (evt: { target: string; nick: string; message: string }) => {
       if (evt.nick === this.nick) return;
-      const isChannel = evt.target.toLowerCase() === this.channel.toLowerCase();
-      const isDM = evt.target.toLowerCase() === this.nick.toLowerCase();
-      if (!isChannel && !isDM) return;
 
       this.log(`<${evt.nick}> ${evt.message.slice(0, 60)}`);
 
@@ -122,8 +119,8 @@ export class IRCBridge extends EventEmitter {
       this.finishReply();
     }
 
-    this.client.say(this.openclawNick, text);
-    this.log(`sent to ${this.openclawNick}: ${text.slice(0, 60)}`);
+    this.client.say(this.channel, text);
+    this.log(`sent to ${this.channel}: ${text.slice(0, 60)}`);
 
     return new Promise<string>((resolve) => {
       const absoluteTimer = setTimeout(() => {
@@ -147,8 +144,8 @@ export class IRCBridge extends EventEmitter {
       this.log("send failed: not connected");
       return;
     }
-    this.client.say(this.openclawNick, text);
-    this.log(`fire-and-forget to ${this.openclawNick}: ${text.slice(0, 60)}`);
+    this.client.say(this.channel, text);
+    this.log(`fire-and-forget to ${this.channel}: ${text.slice(0, 60)}`);
   }
 
   private finishReply(): void {

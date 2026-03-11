@@ -58,30 +58,23 @@ export class EmbeddedIRCServer {
 
       client.on("data", (line: string) => {
         if (!line) return;
-        if (line.toUpperCase().startsWith("NICK") || line.toUpperCase().startsWith("USER") || line.toUpperCase().startsWith("JOIN")) {
-          this.log(`[raw id=${client.id}] ${line}`);
-        }
         const parts = line.split(" ");
         if (parts[0]?.toUpperCase() !== "NICK" || !parts[1]) return;
         const nick = parts[1];
         const existing = this.server.getConnection("nickname", nick);
         if (existing && existing.id !== client.id) {
           this.log(`ghost: kicking old ${nick} (id=${existing.id}) for new id=${client.id}`);
-          for (const [ch, members] of this.channels) {
-            if (members.has(nick)) {
-              members.delete(nick);
-              for (const [, m] of members) {
-                m.send(existing.mask, "QUIT", ":Ghosted by reconnect");
-              }
-              if (members.size === 0) this.channels.delete(ch);
-            }
-          }
-          existing.close();
-          this.server.removeConnection(existing);
+          this.ghostConnection(existing);
         }
       });
 
       client.on("authenticated", () => {
+        for (const conn of this.server._connections) {
+          if (conn.nickname === client.nickname && conn.id !== client.id) {
+            this.log(`ghost-auth: kicking duplicate ${client.nickname} (id=${conn.id}) for id=${client.id}`);
+            this.ghostConnection(conn);
+          }
+        }
         client.send(true, "422", client.nickname, ":MOTD File is missing");
       });
 
@@ -197,6 +190,22 @@ export class EmbeddedIRCServer {
     return new Promise((resolve) => {
       this.server.close(() => resolve());
     });
+  }
+
+  private ghostConnection(conn: IRCConnection): void {
+    const nick = conn.nickname;
+    for (const [ch, members] of this.channels) {
+      const existing = members.get(nick);
+      if (existing && existing.id === conn.id) {
+        members.delete(nick);
+        for (const [, m] of members) {
+          m.send(conn.mask, "QUIT", ":Ghosted by reconnect");
+        }
+        if (members.size === 0) this.channels.delete(ch);
+      }
+    }
+    conn.close();
+    this.server.removeConnection(conn);
   }
 
   private log(msg: string): void {

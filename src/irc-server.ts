@@ -142,12 +142,16 @@ export class EmbeddedIRCServer {
             }
           }
         } else {
-          const targetConn = this.server.getConnection("nickname", target);
-          if (!targetConn) {
-            client.send(true, "401", client.nickname, target, ":No such nick");
-            return;
+          let delivered = false;
+          for (const conn of this.server._connections) {
+            if (conn.nickname === target && conn.id !== client.id && conn._socket) {
+              conn.send(client.mask, "PRIVMSG", target, `:${text}`);
+              delivered = true;
+            }
           }
-          targetConn.send(client.mask, "PRIVMSG", target, `:${text}`);
+          if (!delivered) {
+            client.send(true, "401", client.nickname, target, ":No such nick");
+          }
         }
       });
 

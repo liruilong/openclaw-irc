@@ -1,0 +1,24 @@
+{
+  "name": "openclaw-irc",
+  "version": "1.0.0",
+  "description": "MCP Server with embedded IRC bridge for OpenClaw, text broadcast, and speaker-stack local TTS fallback",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --env-file=.env dist/index.js",
+    "dev": "tsx --env-file=.env src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "irc-framework": "^4.14.0",
+    "ircdkit": "^2.0.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

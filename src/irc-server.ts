@@ -74,11 +74,16 @@ export class EmbeddedIRCServer {
       });
 
       client.on("authenticated", () => {
-        for (const conn of this.server._connections) {
+        this.log(`authenticated: ${client.nickname} (id=${client.id})`);
+        const dupes: IRCConnection[] = [];
+        for (const conn of [...this.server._connections]) {
           if (conn.nickname === client.nickname && conn.id !== client.id) {
-            this.log(`ghost-auth: kicking duplicate ${client.nickname} (id=${conn.id}) for id=${client.id}`);
-            this.ghostConnection(conn);
+            dupes.push(conn);
           }
+        }
+        for (const conn of dupes) {
+          this.log(`ghost-auth: kicking duplicate ${client.nickname} (id=${conn.id}) for id=${client.id}`);
+          this.ghostConnection(conn);
         }
         client.send(true, "422", client.nickname, ":MOTD File is missing");
       });

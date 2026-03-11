@@ -27,6 +27,7 @@ interface IRCServer extends EventEmitter {
   listen(port: number, host?: string): IRCServer;
   close(fn?: () => void): void;
   getConnection(key: string, value: string): IRCConnection | false;
+  removeConnection(conn: IRCConnection): void;
   _connections: IRCConnection[];
   host: string;
   config(key: string, value?: unknown): unknown;
@@ -46,6 +47,21 @@ export class EmbeddedIRCServer {
       hostname: opts.hostname ?? "openclaw-irc",
       maxNickLength: opts.maxNickLength ?? 32,
       requireNickname: true,
+      validateNickname: (
+        conn: IRCConnection,
+        nick: string,
+        _prev: string | null,
+        accept: () => void,
+      ) => {
+        const existing = this.server.getConnection("nickname", nick);
+        if (existing && existing.id !== conn.id) {
+          this.log(`ghost: kicking old ${nick} (id=${existing.id}) for new id=${conn.id}`);
+          existing.send(`:${nick}`, "QUIT", ":Ghosted by reconnect");
+          existing.close();
+          this.server.removeConnection(existing);
+        }
+        accept();
+      },
     }) as IRCServer;
 
     this.setupHandlers();

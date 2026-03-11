@@ -20,6 +20,7 @@ interface IRCConnection extends EventEmitter {
   isAuthed: boolean;
   send(...args: unknown[]): void;
   close(fn?: () => void): void;
+  _socket: unknown;
 }
 
 interface IRCServer extends EventEmitter {
@@ -28,6 +29,7 @@ interface IRCServer extends EventEmitter {
   getConnection(key: string, value: string): IRCConnection | false;
   _connections: IRCConnection[];
   host: string;
+  config(key: string, value?: unknown): unknown;
 }
 
 type ChannelMembers = Map<string, IRCConnection>;
@@ -52,6 +54,10 @@ export class EmbeddedIRCServer {
   private setupHandlers(): void {
     this.server.on("connection", (client: IRCConnection) => {
       this.log(`client connected: id=${client.id}`);
+
+      client.on("authenticated", () => {
+        client.send(true, "422", client.nickname, ":MOTD File is missing");
+      });
 
       client.on("JOIN", (channel: string) => {
         const ch = channel.toLowerCase();
@@ -152,7 +158,7 @@ export class EmbeddedIRCServer {
   start(): Promise<void> {
     return new Promise((resolve) => {
       this.server.on("listening", () => {
-        this.log(`listening on port ${this.port}`);
+        this.log(`IRC server listening on port ${this.port}`);
         resolve();
       });
       this.server.listen(this.port, "0.0.0.0");

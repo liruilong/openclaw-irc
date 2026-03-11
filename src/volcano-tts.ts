@@ -108,15 +108,22 @@ export class VolcanoTTSClient {
 
     process.stderr.write(`[VolcanoTTS] V3 synthesize: lang=${lang}, speaker=${this.config.voiceType}, text="${text.slice(0, 30)}..."\n`);
 
+    const isApiKey = this.config.token.includes("-");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Api-Resource-Id": this.config.resourceId,
+      "X-Api-Request-Id": reqid,
+    };
+    if (isApiKey) {
+      headers["Authorization"] = `Bearer;${this.config.token}`;
+    } else {
+      headers["X-Api-App-Id"] = this.config.appid;
+      headers["X-Api-Access-Key"] = this.config.token;
+    }
+
     const response = await fetch(VOLCANO_V3_API, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-App-Id": this.config.appid,
-        "X-Api-Access-Key": this.config.token,
-        "X-Api-Resource-Id": this.config.resourceId,
-        "X-Api-Request-Id": reqid,
-      },
+      headers,
       body: JSON.stringify(payload),
     });
 

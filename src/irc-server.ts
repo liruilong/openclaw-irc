@@ -158,7 +158,8 @@ export class EmbeddedIRCServer {
 
       const cleanup = (reason: string) => {
         for (const [ch, members] of this.channels) {
-          if (members.has(client.nickname)) {
+          const existing = members.get(client.nickname);
+          if (existing && existing.id === client.id) {
             this.log(`${client.nickname} leaving ${ch} (${reason}, id=${client.id})`);
             members.delete(client.nickname);
             for (const [, member] of members) {

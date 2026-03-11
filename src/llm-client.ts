@@ -16,7 +16,7 @@ export interface IRCBridgeOptions {
 
 /**
  * IRC client that bridges chat between WebSocket clients and OpenClaw.
- * Connects to the embedded IRC server, joins the channel, and relays messages.
+ * Connects to the embedded IRC server, joins #miku, and relays messages.
  */
 export class IRCBridge extends EventEmitter {
   private client: InstanceType<typeof IrcFramework.Client>;
@@ -61,10 +61,12 @@ export class IRCBridge extends EventEmitter {
     });
 
     this.client.on("message", (evt: { target: string; nick: string; message: string }) => {
-      if (evt.target.toLowerCase() !== this.channel.toLowerCase()) return;
       if (evt.nick === this.nick) return;
+      const isChannel = evt.target.toLowerCase() === this.channel.toLowerCase();
+      const isDM = evt.target.toLowerCase() === this.nick.toLowerCase();
+      if (!isChannel && !isDM) return;
 
-      this.log(`<${evt.nick}> ${evt.message.slice(0, 80)}`);
+      this.log(`<${evt.nick}> ${evt.message.slice(0, 60)}`);
 
       if (this.pendingReply && evt.nick.toLowerCase() === this.openclawNick.toLowerCase()) {
         const p = this.pendingReply;
@@ -120,8 +122,8 @@ export class IRCBridge extends EventEmitter {
       this.finishReply();
     }
 
-    this.client.say(this.channel, text);
-    this.log(`sent to ${this.channel}: ${text.slice(0, 80)}`);
+    this.client.say(this.openclawNick, text);
+    this.log(`sent to ${this.openclawNick}: ${text.slice(0, 60)}`);
 
     return new Promise<string>((resolve) => {
       const absoluteTimer = setTimeout(() => {
@@ -137,13 +139,16 @@ export class IRCBridge extends EventEmitter {
     });
   }
 
-  /** Send a message to the channel without waiting for a reply. */
+  /**
+   * Send a message to the channel without waiting for a reply.
+   */
   send(text: string): void {
     if (!this.connected) {
       this.log("send failed: not connected");
       return;
     }
-    this.client.say(this.channel, text);
+    this.client.say(this.openclawNick, text);
+    this.log(`fire-and-forget to ${this.openclawNick}: ${text.slice(0, 60)}`);
   }
 
   private finishReply(): void {

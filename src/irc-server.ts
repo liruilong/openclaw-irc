@@ -94,6 +94,12 @@ export class EmbeddedIRCServer {
           this.channels.set(ch, new Map());
         }
         const members = this.channels.get(ch)!;
+
+        const oldMember = members.get(client.nickname);
+        if (oldMember && oldMember.id !== client.id) {
+          this.log(`join-replace: ${client.nickname} in ${ch} old id=${oldMember.id} -> new id=${client.id}`);
+        }
+
         members.set(client.nickname, client);
 
         for (const [, member] of members) {

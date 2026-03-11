@@ -47,21 +47,6 @@ export class EmbeddedIRCServer {
       hostname: opts.hostname ?? "openclaw-irc",
       maxNickLength: opts.maxNickLength ?? 32,
       requireNickname: true,
-      validateNickname: (
-        conn: IRCConnection,
-        nick: string,
-        _prev: string | null,
-        accept: () => void,
-      ) => {
-        const existing = this.server.getConnection("nickname", nick);
-        if (existing && existing.id !== conn.id) {
-          this.log(`ghost: kicking old ${nick} (id=${existing.id}) for new id=${conn.id}`);
-          existing.send(`:${nick}`, "QUIT", ":Ghosted by reconnect");
-          existing.close();
-          this.server.removeConnection(existing);
-        }
-        accept();
-      },
     }) as IRCServer;
 
     this.setupHandlers();
@@ -70,6 +55,28 @@ export class EmbeddedIRCServer {
   private setupHandlers(): void {
     this.server.on("connection", (client: IRCConnection) => {
       this.log(`client connected: id=${client.id}`);
+
+      client.on("data", (line: string) => {
+        if (!line) return;
+        const parts = line.split(" ");
+        if (parts[0]?.toUpperCase() !== "NICK" || !parts[1]) return;
+        const nick = parts[1];
+        const existing = this.server.getConnection("nickname", nick);
+        if (existing && existing.id !== client.id) {
+          this.log(`ghost: kicking old ${nick} (id=${existing.id}) for new id=${client.id}`);
+          for (const [ch, members] of this.channels) {
+            if (members.has(nick)) {
+              members.delete(nick);
+              for (const [, m] of members) {
+                m.send(existing.mask, "QUIT", ":Ghosted by reconnect");
+              }
+              if (members.size === 0) this.channels.delete(ch);
+            }
+          }
+          existing.close();
+          this.server.removeConnection(existing);
+        }
+      });
 
       client.on("authenticated", () => {
         client.send(true, "422", client.nickname, ":MOTD File is missing");

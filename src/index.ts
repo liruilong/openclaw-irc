@@ -66,7 +66,7 @@ Supported languages: ${SUPPORTED_LANGS.join(", ")}`,
         .describe("The emotion/animation to display"),
       lang: z
         .enum(SUPPORTED_LANGS)
-        .default("ja")
+        .default("zh")
         .describe("Language of the text for TTS synthesis"),
       subtitle: z
         .string()

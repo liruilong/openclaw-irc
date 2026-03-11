@@ -61,10 +61,15 @@ export class EmbeddedIRCServer {
         const parts = line.split(" ");
         if (parts[0]?.toUpperCase() !== "NICK" || !parts[1]) return;
         const nick = parts[1];
-        const existing = this.server.getConnection("nickname", nick);
-        if (existing && existing.id !== client.id) {
-          this.log(`ghost: kicking old ${nick} (id=${existing.id}) for new id=${client.id}`);
-          this.ghostConnection(existing);
+        const toGhost: IRCConnection[] = [];
+        for (const conn of [...this.server._connections]) {
+          if (conn.nickname === nick && conn.id !== client.id) {
+            toGhost.push(conn);
+          }
+        }
+        for (const conn of toGhost) {
+          this.log(`ghost: kicking old ${nick} (id=${conn.id}) for new id=${client.id}`);
+          this.ghostConnection(conn);
         }
       });
 

@@ -7,13 +7,12 @@ import path from "path";
 import type { SupportedLang } from "./types.js";
 
 const CACHE_DIR = path.resolve(import.meta.dirname ?? ".", "../.tts-cache");
-const VOLCANO_V3_API = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
+const VOLCANO_API = "https://openspeech.bytedance.com/api/v1/tts";
 
 interface VolcanoConfig {
-  appid: string;
-  token: string;
+  apiKey: string;
+  cluster: string;
   voiceType: string;
-  resourceId: string;
 }
 
 export interface TTSResult {
@@ -22,13 +21,19 @@ export interface TTSResult {
   sizeBytes: number;
 }
 
+function parseWavDuration(buf: Buffer): number {
+  if (buf.length < 44 || buf.toString("ascii", 0, 4) !== "RIFF") return 0;
+  const byteRate = buf.readUInt32LE(28);
+  if (byteRate === 0) return 0;
+  return Math.round(((buf.length - 44) / byteRate) * 1000);
+}
+
 function parseMp3Duration(buf: Buffer): number {
-  const bytesPerSecond = 24000 / 8;
-  return Math.round((buf.length / bytesPerSecond) * 1000);
+  return Math.round((buf.length / (24000 / 8)) * 1000);
 }
 
 function cacheKey(text: string, lang: string, voiceType: string): string {
-  const input = `volc-v3:${voiceType}:${lang}:${text}`;
+  const input = `volc:${voiceType}:${lang}:${text}`;
   return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
 
@@ -44,22 +49,23 @@ function execFilePromise(cmd: string, args: string[]): Promise<{ stdout: string;
 export class VolcanoTTSClient {
   private config: VolcanoConfig;
   private cacheEnabled: boolean;
+  private encoding: "mp3" | "wav";
 
   constructor(cacheEnabled = true) {
     this.config = {
-      appid: process.env.VOLCANO_APPID ?? "",
-      token: process.env.VOLCANO_TOKEN ?? "",
-      voiceType: process.env.VOLCANO_VOICE ?? "zh_female_shuangkuaisisi_moon_bigtts",
-      resourceId: process.env.VOLCANO_RESOURCE_ID ?? "seed-icl-1.0",
+      apiKey: process.env.VOLCANO_API_KEY ?? "",
+      cluster: process.env.VOLCANO_CLUSTER ?? "volcano_icl",
+      voiceType: process.env.VOLCANO_VOICE ?? "S_M1MG1D2W1",
     };
+    this.encoding = "mp3";
     this.cacheEnabled = cacheEnabled;
     if (cacheEnabled) {
       try { mkdirSync(CACHE_DIR, { recursive: true }); } catch { /* ignore */ }
     }
-    if (!this.config.appid || !this.config.token) {
-      process.stderr.write("[VolcanoTTS] WARNING: VOLCANO_APPID or VOLCANO_TOKEN not set\n");
+    if (!this.config.apiKey) {
+      process.stderr.write("[VolcanoTTS] WARNING: VOLCANO_API_KEY not set\n");
     }
-    process.stderr.write(`[VolcanoTTS] V3 API, voice=${this.config.voiceType}, resource=${this.config.resourceId}\n`);
+    process.stderr.write(`[VolcanoTTS] cluster=${this.config.cluster}, voice=${this.config.voiceType}\n`);
   }
 
   async synthesize(text: string, lang: SupportedLang = "zh"): Promise<TTSResult> {
@@ -76,7 +82,8 @@ export class VolcanoTTSClient {
       process.stderr.write("[VolcanoTTS] playLocal: not macOS, skipping.\n");
       return;
     }
-    const tmpPath = path.join(tmpdir(), `oirc-play-${Date.now().toString(36)}.mp3`);
+    const ext = this.encoding === "wav" ? ".wav" : ".mp3";
+    const tmpPath = path.join(tmpdir(), `oirc-play-${Date.now().toString(36)}${ext}`);
     try {
       writeSync(tmpPath, audio);
       await execFilePromise("afplay", [tmpPath]);
@@ -86,125 +93,74 @@ export class VolcanoTTSClient {
   }
 
   async checkHealth(): Promise<boolean> {
-    return !!(this.config.appid && this.config.token);
+    return !!this.config.apiKey;
   }
 
   private async doSynthesize(text: string, lang: SupportedLang): Promise<TTSResult> {
-    const reqid = crypto.randomUUID();
-    const explicitLang = lang === "zh" ? "zh-cn" : lang === "en" ? "en" : lang === "ja" ? "ja" : undefined;
+    const reqid = crypto.randomUUID().replace(/-/g, "");
+    const explicitLang = lang === "zh" ? "zh-cn" : lang === "en" ? "en" : lang === "ja" ? "ja" : lang === "ko" ? "ko" : undefined;
 
     const payload = {
-      user: { uid: "openclaw-irc" },
-      req_params: {
-        text,
-        speaker: this.config.voiceType,
-        audio_params: {
-          format: "mp3",
-          sample_rate: 24000,
-        },
-        ...(explicitLang ? { additions: JSON.stringify({ explicit_language: explicitLang }) } : {}),
+      app: {
+        cluster: this.config.cluster,
       },
+      user: { uid: "openclaw-irc" },
+      audio: {
+        voice_type: this.config.voiceType,
+        encoding: this.encoding,
+        speed_ratio: 1.0,
+        ...(explicitLang ? { explicit_language: explicitLang } : {}),
+      },
+      request: { reqid, text, operation: "query" },
     };
 
-    process.stderr.write(`[VolcanoTTS] V3 synthesize: lang=${lang}, speaker=${this.config.voiceType}, text="${text.slice(0, 30)}..."\n`);
+    process.stderr.write(`[VolcanoTTS] synthesize: lang=${lang}, voice=${this.config.voiceType}, text="${text.slice(0, 30)}..."\n`);
 
-    const isApiKey = this.config.token.includes("-");
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "X-Api-Resource-Id": this.config.resourceId,
-      "X-Api-Request-Id": reqid,
-    };
-    if (isApiKey) {
-      headers["Authorization"] = `Bearer;${this.config.token}`;
-    } else {
-      headers["X-Api-App-Id"] = this.config.appid;
-      headers["X-Api-Access-Key"] = this.config.token;
-    }
-
-    const response = await fetch(VOLCANO_V3_API, {
+    const response = await fetch(VOLCANO_API, {
       method: "POST",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.config.apiKey,
+      },
       body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "unknown");
-      throw new Error(`Volcano TTS V3 HTTP ${response.status}: ${errText}`);
+      throw new Error(`Volcano TTS HTTP ${response.status}: ${errText}`);
     }
 
-    const audioChunks: Buffer[] = [];
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("Volcano TTS V3: no response body");
+    const result = await response.json() as {
+      code: number;
+      message: string;
+      data?: string;
+      addition?: { duration?: string };
+    };
 
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        try {
-          const chunk = JSON.parse(trimmed) as {
-            code?: number;
-            message?: string;
-            data?: string;
-            event?: string;
-          };
-
-          if (chunk.code && chunk.code !== 0 && chunk.code !== 20000000) {
-            throw new Error(`Volcano TTS V3 error ${chunk.code}: ${chunk.message ?? "unknown"}`);
-          }
-
-          if (chunk.data) {
-            audioChunks.push(Buffer.from(chunk.data, "base64"));
-          }
-        } catch (e) {
-          if (e instanceof Error && e.message.startsWith("Volcano TTS V3 error")) throw e;
-        }
-      }
+    if (result.code !== 3000) {
+      throw new Error(`Volcano TTS error ${result.code}: ${result.message}`);
     }
 
-    if (buffer.trim()) {
-      try {
-        const chunk = JSON.parse(buffer.trim()) as { code?: number; message?: string; data?: string };
-        if (chunk.code && chunk.code !== 0 && chunk.code !== 20000000) {
-          throw new Error(`Volcano TTS V3 error ${chunk.code}: ${chunk.message ?? "unknown"}`);
-        }
-        if (chunk.data) {
-          audioChunks.push(Buffer.from(chunk.data, "base64"));
-        }
-      } catch (e) {
-        if (e instanceof Error && e.message.startsWith("Volcano TTS V3 error")) throw e;
-      }
+    if (!result.data) {
+      throw new Error("Volcano TTS returned no audio data");
     }
 
-    if (audioChunks.length === 0) {
-      throw new Error("Volcano TTS V3 returned no audio data");
-    }
+    const audio = Buffer.from(result.data, "base64");
+    const durationMs = result.addition?.duration
+      ? parseInt(result.addition.duration, 10)
+      : (this.encoding === "wav" ? parseWavDuration(audio) : parseMp3Duration(audio));
 
-    const audio = Buffer.concat(audioChunks);
-    const durationMs = parseMp3Duration(audio);
-
-    process.stderr.write(`[VolcanoTTS] V3 done: ${(audio.length / 1024).toFixed(1)}KB, ~${durationMs}ms\n`);
+    process.stderr.write(`[VolcanoTTS] done: ${(audio.length / 1024).toFixed(1)}KB, ~${durationMs}ms\n`);
     return { audio, durationMs, sizeBytes: audio.length };
   }
 
   private readCache(text: string, lang: string): TTSResult | null {
     if (!this.cacheEnabled) return null;
-    const fp = path.join(CACHE_DIR, `${cacheKey(text, lang, this.config.voiceType)}.mp3`);
+    const fp = path.join(CACHE_DIR, `${cacheKey(text, lang, this.config.voiceType)}.${this.encoding}`);
     if (!existsSync(fp)) return null;
     try {
       const audio = readFileSync(fp);
-      const durationMs = parseMp3Duration(audio);
+      const durationMs = this.encoding === "wav" ? parseWavDuration(audio) : parseMp3Duration(audio);
       return { audio, durationMs, sizeBytes: audio.length };
     } catch { return null; }
   }
@@ -212,7 +168,7 @@ export class VolcanoTTSClient {
   private writeCache(text: string, lang: string, audio: Buffer): void {
     if (!this.cacheEnabled) return;
     try {
-      const fp = path.join(CACHE_DIR, `${cacheKey(text, lang, this.config.voiceType)}.mp3`);
+      const fp = path.join(CACHE_DIR, `${cacheKey(text, lang, this.config.voiceType)}.${this.encoding}`);
       writeFileSync(fp, audio);
     } catch { /* ignore */ }
   }

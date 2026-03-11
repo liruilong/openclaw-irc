@@ -153,7 +153,7 @@ export class VolcanoTTSClient {
             event?: string;
           };
 
-          if (chunk.code && chunk.code !== 0) {
+          if (chunk.code && chunk.code !== 0 && chunk.code !== 20000000) {
             throw new Error(`Volcano TTS V3 error ${chunk.code}: ${chunk.message ?? "unknown"}`);
           }
 
@@ -169,7 +169,7 @@ export class VolcanoTTSClient {
     if (buffer.trim()) {
       try {
         const chunk = JSON.parse(buffer.trim()) as { code?: number; message?: string; data?: string };
-        if (chunk.code && chunk.code !== 0) {
+        if (chunk.code && chunk.code !== 0 && chunk.code !== 20000000) {
           throw new Error(`Volcano TTS V3 error ${chunk.code}: ${chunk.message ?? "unknown"}`);
         }
         if (chunk.data) {
